@@ -82,12 +82,13 @@ main(int argc, char **argv)
       if ((om->offs[p7_FOFFSET] = ftello(ffp)) == -1) p7_Fail("Failed to ftello() current disk position of MSV db file");
       if ((om->offs[p7_POFFSET] = ftello(pfp)) == -1) p7_Fail("Failed to ftello() current disk position of profile db file");
 
-#ifndef p7_IMPL_DUMMY
-      if (esl_newssi_AddKey(nssi, hmm->name, fh, om->offs[p7_MOFFSET], 0, 0) != eslOK)	p7_Fail("Failed to add key %s to SSI index", hmm->name);
+//debugging arm: can I remove this and fix stuff?
+//#ifndef p7_IMPL_DUMMY
+	if (esl_newssi_AddKey(nssi, hmm->name, fh, om->offs[p7_MOFFSET], 0, 0) != eslOK)	p7_Fail("Failed to add key %s to SSI index", hmm->name);
       if (hmm->acc) {
 	if (esl_newssi_AddAlias(nssi, hmm->acc, hmm->name) != eslOK) p7_Fail("Failed to add secondary key %s to SSI index", hmm->acc);
       }
-#endif
+//#endif
 
       p7_hmmfile_WriteBinary(mfp, -1, hmm);
       p7_oprofile_Write(ffp, pfp, om);
@@ -100,6 +101,9 @@ main(int argc, char **argv)
   else if (status == eslEINCOMPAT) p7_Fail("HMM file %s contains different alphabets",   hmmfile);
   else if (status != eslEOF)       p7_Fail("Unexpected error in reading HMMs from %s",   hmmfile);
 
+	printf("Debugging\n");
+	printf("Second file: %s\n", nssi->filenames[1]);
+	printf("Num files: %d\n", nssi->flen);
   if (esl_newssi_Write(nssi) != eslOK) p7_Fail("Failed to write keys to ssi file\n");
   
   printf("done.\n");
