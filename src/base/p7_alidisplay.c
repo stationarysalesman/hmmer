@@ -9,7 +9,6 @@
  *   5. Unit tests.
  *   6. Test driver.
  *   7. Example.
- *   8. Copyright and license information.
  */
 #include "p7_config.h"
 
@@ -24,6 +23,7 @@
 
 #include "base/p7_alidisplay.h"
 #include "base/p7_trace.h"
+
 #include "dp_vector/p7_oprofile.h"
 
 
@@ -1486,12 +1486,4 @@ main(int argc, char **argv)
   return 0;
 }
 #endif /*p7ALIDISPLAY_EXAMPLE*/
-
-
-/*****************************************************************
- * @LICENSE@
- *
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/
 

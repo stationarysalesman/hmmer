@@ -3,13 +3,13 @@
  * builds our sparse mask, for subsequent postprocessing with the more
  * complex glocal/local model.
  * 
+ * ARM NEON version.
+ * Ported from Intel SSE version: Tyler Camp (University of Texas, Austin)
+ * See Intel SSE version for general notes.
+ * 
  * Contents:
  *    1. The P7_CHECKPTMX object and its access macros
  *    2. Function declarations
- *    3. Notes:
- *       [a] Layout of the matrix, in checkpointed rows
- *       [b] Layout of one row, in vectors and floats
- *    4. Copyright and license information.
  */
 #ifndef p7CHECKPTMX_INCLUDED
 #define p7CHECKPTMX_INCLUDED
@@ -17,7 +17,10 @@
 #include "p7_config.h"
 
 #include <stdio.h>
-#include "arm_vector.h"
+
+#include "easel.h"
+#include "esl_neon.h"
+
 #include "dp_reference/p7_refmx.h"
 
 #define p7C_NSCELLS 3
@@ -98,88 +101,7 @@ extern int           p7_checkptmx_SetDumpMode(P7_CHECKPTMX *ox, FILE *dfp, int t
 #ifdef p7_DEBUGGING
 extern char *        p7_checkptmx_DecodeX(enum p7c_xcells_e xcode);
 extern int           p7_checkptmx_DumpFBHeader(P7_CHECKPTMX *ox);
-extern int           p7_checkptmx_DumpFBRow(P7_CHECKPTMX *ox, int rowi, __arm128f *dpc, char *pfx);
+extern int           p7_checkptmx_DumpFBRow(P7_CHECKPTMX *ox, int rowi, esl_neon_128f_t *dpc, char *pfx);
 #endif /*p7_DEBUGGING*/
 
-/*****************************************************************
- * 3. Notes
- *****************************************************************/
-
-/* [a] Layout of the matrix, in checkpointed rows
- * 
- * One P7_CHECKPTMX data structure is used for both Forward and Backward
- * computations on a target sequence. The Forward calculation is
- * checkpointed. The Backward calculation is linear memory in two
- * rows. The end result is a Forward score and a posterior-decoded set
- * of DP bands. (Additionally, the SSV, MSV, and Viterbi filters use
- * a single row of memory from the structure.)
- *
- * In the diagram below, showing the row layout for the main matrix (MDI states):
- *   O = a checkpointed row; 
- *   x = row that isn't checkpointed;
- *   * = boundary row 0, plus row(s) used for Backwards
- * 
- *   i = index of residues in a target sequence of length L
- *   r = index of rows in the DP matrix, R0+R in total
- *
- *               |------------------------- L -------------------------------|   
- *               |-----La----| |-Lb-| |-------------- Lc --------------------|
- * i =  .  .  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21
- *      *  *  *  O  O  O  O  O  x  O  x  x  x  x  O  x  x  x  O  x  x  O  x  O
- * r =  0  1  2  3  4  5  6  7  .  8  .  .  .  .  9  .  .  . 10  .  . 11  . 12
- *      |--R0-|  |-----Ra----| |-Rb-| |-------------- Rc --------------------|
- *               |------------------------- R -------------------------------|   
- *   
- * There are four regions in the rows:
- *    region 0 (R0)                : boundary row 0, and Backwards' two rows
- *    region a ("all"; Ra)         : all rows are kept (no checkpointing)
- *    region b ("between"; Rb)     : partially checkpointed
- *    region c ("checkpointed; Rc) : fully checkpointed
- *   
- * In region a, La = Rb
- * In region b, Rb = 0|1, Lb = 0..Rc+1
- *              more specifically: (Rb=0 && Lb=0) || (Rb=1 && 1 <= Lb <= Rc+1)
- * In region c, Lc = {{Rc+2} \choose {2}}-1 = (Rc+2)(Rc+1)/2 - 1
- * 
- * In this example:
- *    R0 = 3
- *    Ra = 5  La = 5
- *    Rb = 1  La = 2
- *    Rc = 4  Lc = 14
- *                                                             
- * In checkpointed regions, we refer to "blocks", often indexed
- * <b>.  There are Rb+Rc blocks, and each block ends in a checkpointed
- * row. The "width" of each block, often called <w>, decrements from
- * Rc+1 down to 2 in the fully checkpointed region.
- *
- * The reason to mix checkpointing and non-checkpointing is that we
- * use as many rows as we can, given a set memory ceiling, to minimize
- * computation time.
- * 
- * The special states (ENJBC) are kept in xmx for all rows 1..L, not
- * checkpointed.
- */
-
-
-/* [b] Layout of one row, in striped vectors and floats
- *
- *  [1 5 9 13][1 5 9 13][1 5 9 13] [2 6 10 14][2 6 10 14][2 6 10 14] [3 7 11 x][3 7 11 x][3 7 11 x] [4 8 12 x][4 8 12 x][4 8 12 x] [E N JJ J B CC C SCALE]
- *  |-- M ---||-- D ---||-- I ---| |--- M ---||--- D ---||--- I ---| |-- M ---||-- D ---||-- I ---| |-- M ---||-- D ---||-- I ---| 
- *  |---------- q=0 -------------| |------------ q=1 --------------| |---------- q=2 -------------| |---------- q=3 -------------|
- *  |------------------------------------ P7_NVF(M) * p7C_NSCELLS ---------------------------------------------------------------| |---- p7C_NXCELLS ----|
- *  
- *  Number of elements in a vector = p7_VNF      =  4  (assuming 16-byte wide SIMD vectors; 8, for 32-byte AVX vectors)
- *  Number of vectors on a row     = P7_NVF(M)   =  max( 2, ((M-1) / p7_VNF) + 1)
- *  Number of main states          = p7C_NSCELLS =  3  (e.g. M,I,D)
- *  Number of special state vals   = p7C_NXCELLS =  8  (e.g. E, N, JJ, J, B, CC, C, SCALE)
- *  Total size of row              = sizeof(float) * (P7_NVF(M) * P7C_NSCELLS * p7_VNF + p7C_NXCELLS)
- *
- */
-
 #endif /*p7CHECKPTMX_INCLUDED*/
-/*****************************************************************
- * @LICENSE@
- * 
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/

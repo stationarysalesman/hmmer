@@ -1,10 +1,18 @@
+/* p7_oprofile: the vectorized search profile. This is the ARM NEON version.
+ * 
+ * Ported from SSE version by Tyler Camp (University of Texas, Austin).
+ * For general notes, see the Intel SSE version.
+ */
 #ifndef p7OPROFILE_INCLUDED
 #define p7OPROFILE_INCLUDED
 
 #include "p7_config.h"
+
 #include "easel.h"
 #include "esl_alphabet.h"
 #include "esl_random.h"
+
+#include "esl_neon.h"
 
 #include "base/general.h"
 #include "base/p7_bg.h"
@@ -12,47 +20,6 @@
 #include "base/p7_profile.h"
 
 #include "dp_vector/simdvec.h"
-#include "arm_vector.h"
-
-/* The OPROFILE is striped [Farrar07] and interleaved, as is the DP matrix.
- * For example, the layout of a profile for an M=14 model (xref J2/46):
- * 
- * rfv[x] : striped blocks of M emissions, starting with q=0
- *                1     11     1      1  
- *             1593   2604   371x   482* 
- *
- *          to get k given q,z:  k = zQ+q+1
- *          to get q,z given k:  q = (k-1)%Q;  z = (k-1)/Q
- *
- *          unused values (marked * above) are 0.0 odds ratio (-inf score)
- *          for x = gap, none, missing: all odds ratios are 0.0
- * 
- * tsc:  grouped in order of accession in DP for 7 transition scores;
- *       starting at q=0 for all but the three transitions to M, which
- *       are rotated by -1 and rightshifted. DD's follow separately, 
- *       starting at q=0.
- *
- *        {     1      1     1     1     1     1     1 }
- *        {  1593   x482  x482  x482  1593  1593  1593 }    
- *        { [tBMk] [tMM] [tIM] [tDM] [tMD] [tMI] [tII] }
- * 
- *        {    11      1     1     1    11    11    11 }
- *        {  2604   1593  1593  1593  2604  2604  2604 } 
- *        { [tBMk] [tMM] [tIM] [tDM] [tMD] [tMI] [tII] }
- *        
- *        {    1      11    11    11    1     1     1  }
- *        {  371x   2604  2604  2604  371x  371x  371x }
- *        { [tBMk] [tMM] [tIM] [tDM] [tMD] [tMI] [tII] }
- *        
- *        {    1      1     1     1     1     1     1  }
- *        {  482x   371x  371x  371x  482x  482x  482x }
- *        { [tBMk] [tMM] [tIM] [tDM] [tMD] [tMI] [tII] }
- *        
- *        {     1    11    1     1  }
- *        {  1593  2604  371x  482x }
- *        { [TDD] [TDD] [TDD] [TDD] }
- *        
- */
 
 #define p7O_NXSTATES  4    /* special states stored: ENJC                       */
 #define p7O_NXTRANS   2    /* special states all have 2 transitions: move, loop */
@@ -63,8 +30,8 @@ enum p7o_tsc_e          { p7O_BM   = 0, p7O_MM   = 1,  p7O_IM = 2,  p7O_DM = 3, 
 
 typedef struct p7_oprofile_s {
   /* MSVFilter uses scaled, biased uchars: 16x unsigned byte vectors                 */
-  __arm128i **rbv;                /* match scores [x][q]: rm, rm[0] are allocated      */
-  __arm128i **sbv;                /* match scores for ssvfilter                        */
+  esl_neon_128i_t **rbv;        /* match scores [x][q]: rm, rm[0] are allocated      */
+  esl_neon_128i_t **sbv;        /* match scores for ssvfilter                        */
   uint8_t   tbm_b;              /* constant B->Mk cost:    scaled log 2/M(M+1)       */
   uint8_t   tec_b;              /* constant E->C  cost:    scaled log 0.5            */
   uint8_t   tjb_b;              /* constant NCJ move cost: scaled log 3/(L+3)        */
@@ -73,8 +40,8 @@ typedef struct p7_oprofile_s {
   uint8_t   bias_b;             /* positive bias to emission scores, make them >=0   */
 
   /* ViterbiFilter uses scaled swords: 8x signed 16-bit integer vectors              */
-  __arm128i **rwv;                /* [x][q]: rw, rw[0] are allocated  [Kp][Q8]         */
-  __arm128i  *twv;                /* transition score blocks          [8*Q8]           */
+  esl_neon_128i_t **rwv;        /* [x][q]: rw, rw[0] are allocated  [Kp][Q8]         */
+  esl_neon_128i_t  *twv;        /* transition score blocks          [8*Q8]           */
   int16_t   xw[p7O_NXSTATES][p7O_NXTRANS]; /* ENJC state transition costs            */
   float     scale_w;            /* score units: typically 500 / log(2), 1/500 bits   */
   int16_t   base_w;             /* offset of sword scores: typically +12000          */
@@ -82,17 +49,17 @@ typedef struct p7_oprofile_s {
   float     ncj_roundoff;       /* missing precision on NN,CC,JJ after rounding      */
 
   /* Forward, Backward use IEEE754 single-precision floats: 4x vectors               */
-  __arm128f **rfv;                 /* [x][q]:  rf, rf[0] are allocated [Kp][Q4]         */
-  __arm128f  *tfv;                 /* transition probability blocks    [8*Q4]           */
+  esl_neon_128f_t **rfv;        /* [x][q]:  rf, rf[0] are allocated [Kp][Q4]         */
+  esl_neon_128f_t  *tfv;        /* transition probability blocks    [8*Q4]           */
   float    xf[p7O_NXSTATES][p7O_NXTRANS]; /* ENJC transition costs                   */
 
   /* Our actual vector mallocs, before we align the memory                           */
-  __arm128i  *rbv_mem;
-  __arm128i  *sbv_mem;
-  __arm128i  *rwv_mem;
-  __arm128i  *twv_mem;
-  __arm128f   *tfv_mem;
-  __arm128f   *rfv_mem;
+  esl_neon_128i_t  *rbv_mem;
+  esl_neon_128i_t  *sbv_mem;
+  esl_neon_128i_t  *rwv_mem;
+  esl_neon_128i_t  *twv_mem;
+  esl_neon_128f_t  *tfv_mem;
+  esl_neon_128f_t  *rfv_mem;
   
   /* Disk offset information for hmmpfam's fast model retrieval                      */
   off_t  offs[p7_NOFFSETS];     /* p7_{MFP}OFFSET, or -1                             */
@@ -125,7 +92,7 @@ typedef struct p7_oprofile_s {
   int    mode;                  /* currently must be p7_LOCAL                        */
   float  nj;                    /* expected # of J's: 0 or 1, uni vs. multihit       */
 
-  int    is_shadow;             /* TRUE if this profile shadows another, and its ptrs are references */
+  int    is_shadow;             /* TRUE if this shadows another; ptrs are references */
 } P7_OPROFILE;
 
 typedef struct {
@@ -139,7 +106,7 @@ typedef struct {
 static inline float 
 p7_oprofile_FGetEmission(const P7_OPROFILE *om, int k, int x)
 {
-  union { __arm128f v; float p[4]; } u;
+  union { esl_neon_128f_t v; float p[4]; } u;
   int   Q = P7_NVF(om->M);
   int   q = ((k-1) % Q);
   int   r = (k-1)/Q;
@@ -176,9 +143,3 @@ extern int          p7_oprofile_GetFwdEmissionScoreArray(const P7_OPROFILE *om, 
 extern int          p7_oprofile_GetFwdEmissionArray(const P7_OPROFILE *om, P7_BG *bg, float *arr );
 
 #endif /*p7OPROFILE_INCLUDED*/
-/*****************************************************************
- * @LICENSE@
- * 
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/

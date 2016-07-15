@@ -1,16 +1,19 @@
+/* DP matrix for SSV, MSV, Viterbi filters: ARM NEON version.
+ * Ported from Intel SSE version by Tyler Camp (University of Texas, Austin)
+ */
 #ifndef p7FILTERMX_INCLUDED
 #define p7FILTERMX_INCLUDED
 
 #include "p7_config.h"
 
 #include <stdio.h>
-#include "arm_vector.h"
+#include "esl_neon.h"
 
 enum p7f_mxtype_e { p7F_NONE = 0, p7F_SSVFILTER = 1, p7F_MSVFILTER = 2, p7F_VITFILTER = 3 };
                                 
-typedef struct p7_filtermx_s {  /* MSV needs P7_NVB(M); VF needs 3*P7_NVW(M) __arm128i vectors. */
-  int      M;			/* current profile size: determines width of <dp> row    */
-  __arm128i *dp;			/* aligned, one row of DP memory: >= 3*P7_NVW(M) vectors */
+typedef struct p7_filtermx_s {  /* MSV needs P7_NVB(M); VF needs 3*P7_NVW(M) esl_neon_128i_t vectors. */
+  int              M;		/* current profile size: determines width of <dp> row    */
+  esl_neon_128i_t *dp;		/* aligned, one row of DP memory: >= 3*P7_NVW(M) vectors */
 
   void    *dp_mem;		/* unaligned raw memory, where we allocate    */
   int      allocM;		/* <dp_mem> is allocated to hold up to M=allocM */
@@ -47,11 +50,3 @@ extern int p7_filtermx_DumpVFRow(const P7_FILTERMX *fx, int rowi, int16_t xE, in
 #endif
 
 #endif /*p7FILTERMX_INCLUDED*/
-/*****************************************************************
- * @LICENSE@
- * 
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/
-
-

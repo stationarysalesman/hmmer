@@ -1,10 +1,12 @@
 /* Implementation of P7_CHECKPTMX: checkpointed, striped vector DP matrix.
+ *  
+ * ARM NEON version.
+ * Ported from Intel/SSE version by Tyler Camp (U. Texas, Austin)
  * 
  * Contents:
  *    1. API for the P7_CHECKPTMX object
  *    2. Debugging, development routines.
  *    3. Internal routines.
- *    4. Copyright and license information.
  */
 #include "p7_config.h"
 
@@ -12,7 +14,8 @@
 #include <stdio.h>
 
 #include "easel.h"
-#include "arm_vector.h"
+#include "esl_neon.h"
+
 #include "dp_vector/simdvec.h"
 #include "dp_vector/p7_checkptmx.h"
 
@@ -98,7 +101,7 @@ p7_checkptmx_Create(int M, int L, int64_t ramlimit)
   ESL_ALLOC( ox->dpf,    sizeof(float *) * ox->allocR);  
   // Static analyzers may complain about the above.
   // sizeof(float *) is correct, even though ox->dpf is char **.
-  // ox->dpf will be cast to __arm128f SIMD vector in DP code.
+  // ox->dpf will be cast to esl_neon_128f_t SIMD vector in DP code.
 
   ox->dpf[0] = (char *) ( ((uintptr_t) ox->dp_mem + p7_VALIGN - 1) & p7_VALIMASK); /* hand memory alignment */
   for (r = 1; r < ox->validR; r++)
@@ -285,7 +288,7 @@ p7_checkptmx_MinSizeof(int M, int L)
   int    minR = 3 + (int) ceil(minimum_rows(L));  // 3 = Ra, 2 rows for backwards, 1 for fwd[0]
   
   n += p7_VALIGN-1;                                                  // dp_mem has to be hand-aligned for vectors
-  n += minR * (sizeof(float) * p7_VNF * Q * p7C_NSCELLS);            // dp_mem, main: QR supercells; each has p7C_NSCELLS=3 cells, MID; each cell is __arm128f vector of four floats (p7_VNF=4 * float)
+  n += minR * (sizeof(float) * p7_VNF * Q * p7C_NSCELLS);            // dp_mem, main: QR supercells; each has p7C_NSCELLS=3 cells, MID; each cell is esl_neon_128f_t vector of four floats (p7_VNF=4 * float)
   n += minR * (ESL_UPROUND(sizeof(float) * p7C_NXCELLS, p7_VALIGN)); // dp_mem, specials: maintaining vector memory alignment 
   n += minR * sizeof(float *);                                       // dpf[] row ptrs
   return n;
@@ -457,9 +460,9 @@ p7_checkptmx_DumpFBHeader(P7_CHECKPTMX *ox)
  *            them in the debugging dump.)
  */
 int
-p7_checkptmx_DumpFBRow(P7_CHECKPTMX *ox, int rowi, __arm128f *dpc, char *pfx)
+p7_checkptmx_DumpFBRow(P7_CHECKPTMX *ox, int rowi, esl_neon_128f_t *dpc, char *pfx)
 {
-  union { __arm128f v; float x[p7_VNF]; } u;
+  union { esl_neon_128f_t v; float x[p7_VNF]; } u;
   float *v         = NULL;		/*  */
   int    Q         = ox->Qf;
   int    M         = ox->M;
@@ -656,9 +659,3 @@ checkpointed_rows(int L, int R)
 /*----------------- end, internals ------------------------------*/
 
 
-/*****************************************************************
- * @LICENSE@
- *
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/

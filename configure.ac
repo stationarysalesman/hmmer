@@ -62,6 +62,7 @@ else
   sre_cflags_env_set=yes
 fi
 
+
 ################################################################
 # 3. Info on the package
 ################################################################
@@ -86,16 +87,16 @@ fi
 # to use HMMER as a library inside other packages, with no name clashes.
 ################################################################
 
-HMMER_DATE="Apr 2015"
-HMMER_COPYRIGHT="Copyright (C) 2015 Howard Hughes Medical Institute."
+HMMER_DATE="July 2016"
+HMMER_COPYRIGHT="Copyright (C) 2016 Howard Hughes Medical Institute."
 HMMER_LICENSE="Freely distributed under the open source BSD license."
 HMMER_VERSION=$PACKAGE_VERSION
 HMMER_URL="hmmer.org"
 HMMER_ESLDIR="lib/easel"
 HMMER_SADIR="lib/libdivsufsort"
 
-EASEL_DATE="Apr 2015"
-EASEL_COPYRIGHT="Copyright (C) 2015 Howard Hughes Medical Institute."
+EASEL_DATE="July 2016"
+EASEL_COPYRIGHT="Copyright (C) 2016 Howard Hughes Medical Institute."
 EASEL_LICENSE="Freely distributed under the open source BSD license."
 EASEL_VERSION="h$PACKAGE_VERSION"
 EASEL_URL="http://bioeasel.org/"
@@ -137,7 +138,22 @@ AC_DEFINE(eslLIBRARY)
 #       host_cpu        example: i686
 #       host_vendor     example: pc
 #       host_os         example: linux-gnu
+# and we set one more, which we use to limit which
+# vector implementations we'll check for and try to include, if 
+# they haven't been explicitly called for on the cmdline:
+#       host_platform   "intel" | "power" | "arm"
 AC_CANONICAL_HOST
+case $host in 
+    ia64-*-*)      host_platform=intel;;
+    i?86-*-*)      host_platform=intel;;
+    x86*-*-*)      host_platform=intel;;
+    arm*-*-*)      host_platform=arm;;
+    powerpc*-*-*)  host_platform=power;;
+    *)             AC_MSG_WARN([host_platform unrecognized (not intel, power, arm...)]);;
+esac
+
+
+
 
 # Check if we're a binary distribution. 
 # Trigger is existence of binaries/, nonexistence of src/.
@@ -156,6 +172,15 @@ AC_MSG_NOTICE([Full HMMER source distribution - using full configuration])
 ################################################################
 # 4. Process the ./configure command line
 ################################################################
+
+# --enable-sse    Enable the Intel SSE vector implementation
+# --enable-neon   Enable the ARM Neon vector implementation
+#
+# $enable_{sse,neon} = "yes" | "no" | "check"
+#
+AC_ARG_ENABLE(sse, [AS_HELP_STRING([--enable-sse], [enable Intel SSE vector implementation])], enable_sse=$enableval,   enable_sse=check)
+AC_ARG_ENABLE(neon,[AS_HELP_STRING([--enable-neon],[enable ARM NEON vector implementation])],  enable_neon=$enableval,  enable_neon=check)
+
 
 # --enable-debugging      - set basic debugging (level 1)
 # --enable-debugging=x    - set debugging level to <x> (1-3)
@@ -270,19 +295,6 @@ AS_IF([test "x$check_threads" != xno],
                       AC_MSG_FAILURE([POSIX multithreading failed])
                     fi])])
 
-#AC_ARG_ENABLE(threads, 
-#[  --enable-threads        enable POSIX multithreading support],
-#[case $enable_threads in 
-#   yes) AC_MSG_NOTICE([enabled POSIX multithreading support])
-#        AC_CHECK_FUNCS(pthread_setconcurrency)
-#        AC_CHECK_FUNCS(pthread_attr_setscope)
-#	ACX_PTHREAD(AC_DEFINE(HMMER_THREADS))
-#	;;
-#   no)  AC_MSG_NOTICE([POSIX multithreading support disabled])
-#        ;;
-#   *)   echo "Ignoring unknown argument to --disable-threads: $enable_threads"
-#	;;
-#esac])
 
 # --with-gsl        - enable hooks into the GSL (GNU Scientific Library)
 #
@@ -301,11 +313,13 @@ AC_ARG_WITH([gsl],
             ],
 	    [with_gsl=no])
 
-# Enable NEON extension on ARM processors
-AC_ARG_ENABLE(neon,[AS_HELP_STRING([--enable-neon],[enable NEON extension])],          enable_neon=$enableval,   enable_neon=check)
+
+
+
 ################################################################
 # 5. Checks for programs, including ${CC} and its ${CFLAGS}.
 #################################################################
+
 AC_PROG_CC
 AC_PROG_INSTALL
 # MPI :  set @CC@ to mpicc;
@@ -351,82 +365,126 @@ fi
 # This sets @PIC_FLAGS@ output variable for Easel.
 ESL_PIC_FLAGS
 
-# ARM and NEON SIMD flags
-if test "$enable_neon" = "yes" || test "$enable_neon" = "check"; then
+
+
+
+
+################################################################
+# Check which vector implementations we can compile, for
+# any that weren't explicitly turned on/off on command line.
+# After this, $enable_{sse,neon} are either "yes" or "no".
+#
+# 
+if test "$host_platform" = "arm" && test "$enable_neon" = "check"; then
+   sre_save_CFLAGS="$CFLAGS"
+   sre_save_CPPFLAGS="$CPPFLAGS"
+   sre_save_SIMDFLAGS="$SIMD_CFLAGS"
+
    if test "x$SIMD_CFLAGS" = x; then
      case $ax_cv_c_compiler_vendor in
        gnu)   AX_CHECK_COMPILER_FLAGS(-mfpu=neon,[SIMD_CFLAGS="-mfpu=neon"],[]);;
        *)     ;;
      esac
    fi
-fi
-if test "$enable_neon" = "check"; then
-   sre_save_CFLAGS="$CFLAGS"
-   sre_save_CPPFLAGS="$CPPFLAGS"
+
+   AC_MSG_CHECKING([whether ARM NEON vector instructions are supported])	
    CFLAGS="$CFLAGS $SIMD_CFLAGS"
    CPPFLAGS="$CPPFLAGS $SIMD_CFLAGS"
-   AC_CHECK_HEADER([arm_neon.h],[
-     AC_MSG_CHECKING([if platform can run NEON instructions])
-     AC_RUN_IFELSE([AC_LANG_PROGRAM( [[#include <arm_neon.h>]],
-                              [[ int32x4_t x = vdupq_n_s32(0);]])],
+   AC_RUN_IFELSE( [AC_LANG_PROGRAM( [[#include <arm_neon.h>]],
+                                    [[ int32x4_t x = vdupq_n_s32(0);]])],
                    [AC_MSG_RESULT([yes])
                      enable_neon=yes],
-                   [AC_MSG_RESULT([no])])])
+                   [AC_MSG_RESULT([no])
+		     enable_neon=no])
    CFLAGS="$sre_save_CFLAGS"
    CPPFLAGS="$sre_save_CPPFLAGS"
+   SIMD_CFLAGS="$sre_save_SIMDFLAGS"
+   AC_DEFINE(HAVE_NEON,1,[support NEON vector instructions])	
 fi
+	
+	
+if test "$host_platform" = "intel" && test "$enable_sse" = "check"; then
+   sre_save_CFLAGS="$CFLAGS"
+   CFLAGS="$CFLAGS $SIMD_CFLAGS"
 
-# Determine target if targeting is specified.
-# Do this by attempting to execute code with different 
-# cominations of NEON/VFP compiler options. This allows 
-# us to determine the best compile options for each 
-# ARM architecture. 
-if test "$enable_neon" = "yes" || test "$enable_neon" = "check"; then
-  cortex_a5="-mcpu=cortex-a5 -mfpu=neon-fp16"
-  cortex_a7="-mcpu=cortex-a7 -mfpu=neon-vfpv4"
-  cortex_a8="-mcpu=cortex-a8 -mfpu=neon"
-  cortex_a9="-mcpu=cortex-a9 -mfpu=neon-fp16"
-  cortex_a15="-mcpu=cortex-a15 -mfpu=neon-vfpv4"
-  sre_save_CFLAGS="$CFLAGS"
-  sre_save_CPPFLAGS="$CPPFLAGS"
-  CFLAGS="$CFLAGS $cortex_a5"
-  CPPFLAGS="$CPPFLAGS $cortex_a5"     
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a5"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a7"  
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a7"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+   AC_MSG_CHECKING([whether Intel SSE2 vector instructions are supported])
+   AC_COMPILE_IFELSE(  [AC_LANG_PROGRAM([[#include <emmintrin.h>]],
+ 				 [[__m128i* one=(__m128i*)_mm_malloc(4, 16);
+				   __m128i* two=(__m128i*)_mm_malloc(4, 16);
+				   __m128i xmm1 = _mm_load_si128(one);
+				   __m128i xmm2 = _mm_load_si128(two);
+				   __m128i xmm3 = _mm_or_si128(xmm1, xmm2);
+				   _mm_store_si128(one, xmm3);
+				   _mm_free(one);
+				   _mm_free(two);
+				 ]])],
+	[ AC_MSG_RESULT([yes])
+          enable_sse=yes],
+	[ AC_MSG_RESULT([no])
+          enable_sse=no])
+
+    CFLAGS="$sre_save_CFLAGS"
+    AC_DEFINE(HAVE_SSE,1,[support SSE vector instructions])	
+fi
+	
+
+################################################################
+# Set SIMD_CFLAGS: determine compiler options for vector implementations
+# Only do this if caller didn't provide a specific SIMD_CFLAGS already.
+#
+
+if test "$enable_neon" = "yes" && test "x$SIMD_CFLAGS" = x; then
+   sre_save_CFLAGS="$CFLAGS"
+   sre_save_CPPFLAGS="$CPPFLAGS"
+  
+   case $ax_cv_c_compiler_vendor in
+     gnu)   AX_CHECK_COMPILER_FLAGS(-mfpu=neon,[SIMD_CFLAGS="-mfpu=neon"],[]);;
+     *)     ;;
+   esac
+
+   # Determine target if targeting is specified.
+   # Do this by attempting to execute code with different 
+   # combinations of NEON/VFP compiler options. This allows 
+   # us to determine the best compile options for each 
+   # ARM architecture. 
+   cortex_a5="-mcpu=cortex-a5 -mfpu=neon-fp16"
+   cortex_a7="-mcpu=cortex-a7 -mfpu=neon-vfpv4"
+   cortex_a8="-mcpu=cortex-a8 -mfpu=neon"
+   cortex_a9="-mcpu=cortex-a9 -mfpu=neon-fp16"
+   cortex_a15="-mcpu=cortex-a15 -mfpu=neon-vfpv4"
+  
+   CFLAGS="$CFLAGS $cortex_a5"
+   CPPFLAGS="$CPPFLAGS $cortex_a5"     
+   AC_MSG_CHECKING([for cortex_a5])
+   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                     [vector_flags="$cortex_a5"; AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no])])
+
+   CFLAGS="$sre_save_CFLAGS $cortex_a7"  
+   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a7"
+   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
                     [vector_flags="$cortex_a7"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a8"  
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a8"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a8"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a9"  
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a9"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a9"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a15"  
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a15"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a15"], [])
+   CFLAGS="$sre_save_CFLAGS $cortex_a8"  
+   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a8"
+   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                     [vector_flags="$cortex_a8"], [])
+   CFLAGS="$sre_save_CFLAGS $cortex_a9"  
+   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a9"
+   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                     [vector_flags="$cortex_a9"], [])
+   CFLAGS="$sre_save_CFLAGS $cortex_a15"  
+   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a15"
+   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                     [vector_flags="$cortex_a15"], [])
   
   CFLAGS="$sre_save_CFLAGS"
   CPPFLAGS="$sre_save_CPPFLAGS"
-
-fi
-if test "x$vector_flags" = x; then
-  SIMD_CFLAGS="-mfpu=neon" 
-fi
-
-
-if test "y$vector_flags" != y; then
-  SIMD_CFLAGS="$vector_flags"
-  enable_neon=yes
+  if test "x$vector_flags" != x; then
+    SIMD_CFLAGS="$vector_flags"
+  fi
 fi
 
-if test "$enable_neon" = "yes"; then
-  AC_DEFINE(HAVE_NEON,1,[Support NEON instructions])
-fi
+
+
 
 AC_SUBST(SIMD_CFLAGS)
 
@@ -528,26 +586,51 @@ AC_TYPE_OFF_T
 # 
 AX_GCC_FUNC_ATTRIBUTE(noreturn)
 
+# HAVE_FUNC_ATTRIBUTE_FORMAT
+#   
+#   We have some printf()-style functions that use varargs.
+#   Apparently when you do something like 
+#           int64_t bigint;
+#           my_printf("%d", bigint);
+#   a compiler can't normally detect the size mismatch between the
+#   specifier (%d) and the argument (bigint). Usually this isn't a
+#   problem (apparently most platforms cast appropriately) but we had
+#   problems on ARM. gcc-like compilers allow declaring an attribute
+#   of format(printf, <string_index>, <first-to-check>), enabling the
+#   compiler to typecheck printf()-like arguments, and warn appropriately.
+#   We only need or use this in development.
+#
+# This gets set in the Easel esl_config.h.
+AX_GCC_FUNC_ATTRIBUTE(format)
+
+
 
 ################################################################
 # 11. Checks for functions, defining HAVE_FOO when foo is found
 #################################################################
+
 AC_CHECK_FUNCS(mkstemp)
 AC_CHECK_FUNCS(popen)
+AC_CHECK_FUNCS(putenv)
 AC_CHECK_FUNCS(strcasecmp)
+AC_CHECK_FUNCS(strsep)
 AC_CHECK_FUNCS(times)
 AC_CHECK_FUNCS(getpid)
 AC_CHECK_FUNCS(sysctl)
 AC_CHECK_FUNCS(sysconf)
 AC_CHECK_FUNCS(getcwd)
+AC_CHECK_FUNCS(chmod)
 AC_CHECK_FUNCS(stat)
 AC_CHECK_FUNCS(fstat)
 AC_CHECK_FUNCS(erfc)
 
-AC_CHECK_FUNCS(ntohs, , AC_CHECK_LIB(socket, ntohs))
-AC_CHECK_FUNCS(ntohl, , AC_CHECK_LIB(socket, ntohl))
-AC_CHECK_FUNCS(htons, , AC_CHECK_LIB(socket, htons))
-AC_CHECK_FUNCS(htonl, , AC_CHECK_LIB(socket, htonl))
+AC_SEARCH_LIBS(ntohs,     socket)
+AC_SEARCH_LIBS(ntohl,     socket)
+AC_SEARCH_LIBS(htons,     socket)
+AC_SEARCH_LIBS(htonl,     socket)
+AC_SEARCH_LIBS(socket,    socket)
+AC_SEARCH_LIBS(inet_pton, nsl)
+
 AC_FUNC_FSEEKO
 
 #################################################################

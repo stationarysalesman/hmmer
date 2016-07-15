@@ -1,10 +1,11 @@
 /* Implementation of P7_FILTERMX, the one-row DP memory for MSV and
  * Viterbi filters.
+ *
+ * ARM NEON version, ported from Intel SSE by Tyler Camp (U. Texas, Austin)
  * 
  * Contents:
  *   1. The P7_FILTERMX object
  *   2. Debugging and development routines
- *   3. Copyright and license information
  */
 
 #include "p7_config.h"
@@ -12,8 +13,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-
 #include "easel.h"
+#include "esl_neon.h"
 
 #include "dp_vector/simdvec.h"
 #include "dp_vector/p7_filtermx.h"
@@ -61,11 +62,11 @@ p7_filtermx_Create(int allocM)
 #endif 
   
   /*                    16B per vector  * (MDI)states *  ~M/4 vectors    + alignment slop */
-  ESL_ALLOC(fx->dp_mem, (sizeof(__arm128i) * p7F_NSCELLS * P7_NVW(allocM)) + (p7_VALIGN-1));
+  ESL_ALLOC(fx->dp_mem, (sizeof(esl_neon_128i_t) * p7F_NSCELLS * P7_NVW(allocM)) + (p7_VALIGN-1));
   fx->allocM = allocM;
 
   /* Manual memory alignment incantation: */
-  fx->dp = (__arm128i *) ( (unsigned long int) (  (char *) fx->dp_mem + (p7_VALIGN-1) ) & p7_VALIMASK);
+  fx->dp = (esl_neon_128i_t *) ( (unsigned long int) (  (char *) fx->dp_mem + (p7_VALIGN-1) ) & p7_VALIMASK);
   return fx;
 
  ERROR:
@@ -104,9 +105,9 @@ p7_filtermx_GrowTo(P7_FILTERMX *fx, int allocM)
   if (allocM <= fx->allocM) return eslOK;
 
   /* if not, grow it */
-  ESL_REALLOC(fx->dp_mem, (sizeof(__arm128i) * (p7F_NSCELLS * P7_NVW(allocM))) + (p7_VALIGN-1));
+  ESL_REALLOC(fx->dp_mem, (sizeof(esl_neon_128i_t) * (p7F_NSCELLS * P7_NVW(allocM))) + (p7_VALIGN-1));
   fx->allocM = allocM;
-  fx->dp     = (__arm128i *) ( (unsigned long int) ( (char *) fx->dp_mem + (p7_VALIGN-1)) & p7_VALIMASK);
+  fx->dp     = (esl_neon_128i_t *) ( (unsigned long int) ( (char *) fx->dp_mem + (p7_VALIGN-1)) & p7_VALIMASK);
 
   return eslOK;
 
@@ -129,7 +130,7 @@ size_t
 p7_filtermx_Sizeof(const P7_FILTERMX *fx)
 {
   size_t n = sizeof(P7_FILTERMX);
-  n += (sizeof(__arm128i) * p7F_NSCELLS * P7_NVW(fx->allocM)) + (p7_VALIGN-1);
+  n += (sizeof(esl_neon_128i_t) * p7F_NSCELLS * P7_NVW(fx->allocM)) + (p7_VALIGN-1);
   return n;
 }
 
@@ -145,7 +146,7 @@ size_t
 p7_filtermx_MinSizeof(int M)
 {
   size_t n = sizeof(P7_FILTERMX);
-  n += (sizeof(__arm128i) * p7F_NSCELLS * P7_NVW(M)) + (p7_VALIGN-1);
+  n += (sizeof(esl_neon_128i_t) * p7F_NSCELLS * P7_NVW(M)) + (p7_VALIGN-1);
   return n;
 }
 
@@ -264,7 +265,7 @@ p7_filtermx_DumpMFRow(const P7_FILTERMX *fx, int rowi, uint8_t xE, uint8_t xN, u
   int      Q  = P7_NVB(fx->M);	/* number of vectors in the MSV row */
   uint8_t *v  = NULL;		/* array of scores after unstriping them */
   int      q,z,k;
-  union { __arm128i v; uint8_t i[16]; } tmp;
+  union { esl_neon_128i_t v; uint8_t i[16]; } tmp;
   int      status;
 
   ESL_DASSERT1( (fx->type == p7F_MSVFILTER || fx->type == p7F_SSVFILTER) );
@@ -335,11 +336,11 @@ ERROR:
 int
 p7_filtermx_DumpVFRow(const P7_FILTERMX *fx, int rowi, int16_t xE, int16_t xN, int16_t xJ, int16_t xB, int16_t xC)
 {
-  __arm128i *dp = fx->dp;		/* enable MMXf(q), DMXf(q), IMXf(q) macros */
+  esl_neon_128i_t *dp = fx->dp;		/* enable MMXf(q), DMXf(q), IMXf(q) macros */
   int      Q  = P7_NVW(fx->M);	/* number of vectors in the VF row */
   int16_t *v  = NULL;		/* array of unstriped, uninterleaved scores  */
   int      q,z,k;
-  union { __arm128i v; int16_t i[8]; } tmp;
+  union { esl_neon_128i_t v; int16_t i[8]; } tmp;
   int      status;
 
   ESL_ALLOC(v, sizeof(int16_t) * ((Q*8)+1));
@@ -397,10 +398,3 @@ ERROR:
 #endif /*p7_DEBUGGING*/
 
 
-
-/*****************************************************************
- * @LICENSE@
- * 
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/

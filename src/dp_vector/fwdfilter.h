@@ -14,9 +14,3 @@ extern int p7_BackwardFilter(const ESL_DSQ *dsq, int L, const P7_OPROFILE *om, P
 
 
 #endif /*p7FWDFILTER_INCLUDED*/
-/*****************************************************************
- * @LICENSE@
- * 
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/

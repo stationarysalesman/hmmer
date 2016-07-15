@@ -47,6 +47,8 @@ development team and the Eddy/Rivas laboratories at Harvard
 University, whose current and past members include:
 
    Sean Eddy            HHMI | Harvard University
+   Tyler Camp           University of Texas, Austin
+   Nick Carter          HHMI | Harvard University
    Sergi Castellano     Max Planck Leipzig, Germany
    Goran Ceric          HHMI Janelia Research Campus
    Alex Coventry        Cornell University
@@ -56,6 +58,7 @@ University, whose current and past members include:
    Diana Kolbe          University of Iowa
    Eric Nawrocki        National Center for Biotechnology Information (NCBI)
    Elena Rivas          Harvard University
+   Walt Shands          Intel Corporation | University of Montana
    Travis Wheeler       University of Montana
 
 HMMER also includes contributions from others, including copyrighted
@@ -64,7 +67,7 @@ places in source files. These include:
 
    Jeremy Buhler                   Washington University
    Ian Holmes                      UC Berkeley
-   Bjarne Knudsen                  CLC bio, Aarhus Denmark
+   Bjarne Knudsen                  CLCbio, Aarhus, Denmark
    Erik Lindahl                    Stanford University
    Graeme Mitchison                Cambridge University
    Lee Newberg                     Rensselaer Polytechnic Institute

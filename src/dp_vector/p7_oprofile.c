@@ -1,5 +1,8 @@
 /* Routines for the P7_OPROFILE structure:  
  * a search profile in an optimized implementation.
+ *
+ * ARM NEON version. 
+ * Ported from Intel SSE by Tyler Camp (University of Texas, Austin)
  * 
  * Contents:
  *   1. The P7_OPROFILE object: allocation, initialization, destruction.
@@ -8,7 +11,6 @@
  *   4. Debugging and development utilities.
  *   5. Benchmark driver.
  *   6. Example.
- *   7. Copyright and license information.
  */
 #include "p7_config.h"
 
@@ -17,12 +19,12 @@
 #include <string.h>
 #include <math.h>		/* roundf() */
 
-
 #include "easel.h"
 #include "esl_alphabet.h"
 #include "esl_random.h"
-#include "esl_neon.h"
 #include "esl_vectorops.h"
+
+#include "esl_neon.h"
 
 #include "base/p7_bg.h"
 #include "base/p7_hmm.h"
@@ -32,7 +34,7 @@
 #include "search/modelconfig.h"
 
 #include "dp_vector/p7_oprofile.h"
-#include "arm_vector.h"
+
 
 /*****************************************************************
  * 1. The P7_OPROFILE structure: a score profile.
@@ -40,7 +42,6 @@
 
 /* Function:  p7_oprofile_Create()
  * Synopsis:  Allocate an optimized profile structure.
- * Incept:    SRE, Sun Nov 25 12:03:19 2007 [Casa de Gatos]
  *
  * Purpose:   Allocate for profiles of up to <allocM> nodes for digital alphabet <abc>.
  *
@@ -49,13 +50,13 @@
 P7_OPROFILE *
 p7_oprofile_Create(int allocM, const ESL_ALPHABET *abc)
 {
-  int          status;
   P7_OPROFILE *om  = NULL;
   int          nqb = P7_NVB(allocM); /* # of uchar vectors needed for query */
   int          nqw = P7_NVW(allocM); /* # of sword vectors needed for query */
   int          nqf = P7_NVF(allocM); /* # of float vectors needed for query */
   int          nqs = nqb + p7O_EXTRA_SB;
   int          x;
+  int          status;
 
   /* level 0 */
   ESL_ALLOC(om, sizeof(P7_OPROFILE));
@@ -83,33 +84,34 @@ p7_oprofile_Create(int allocM, const ESL_ALPHABET *abc)
   om->consensus = NULL;
 
   /* level 1 */
-  ESL_ALLOC(om->rbv_mem, sizeof(__arm128i) * nqb  * abc->Kp          +15); /* +15 is for manual 16-byte alignment */
-  ESL_ALLOC(om->sbv_mem, sizeof(__arm128i) * nqs  * abc->Kp          +15); 
-  ESL_ALLOC(om->rwv_mem, sizeof(__arm128i) * nqw  * abc->Kp          +15);                     
-  ESL_ALLOC(om->twv_mem, sizeof(__arm128i) * nqw  * p7O_NTRANS       +15);   
-  ESL_ALLOC(om->rfv_mem, sizeof(__arm128f)  * nqf  * abc->Kp          +15);                     
-  ESL_ALLOC(om->tfv_mem, sizeof(__arm128f)  * nqf  * p7O_NTRANS       +15);    
+  ESL_ALLOC(om->rbv_mem, sizeof(esl_neon_128i_t) * nqb  * abc->Kp          +15); /* +15 is for manual 16-byte alignment */
+  ESL_ALLOC(om->sbv_mem, sizeof(esl_neon_128i_t) * nqs  * abc->Kp          +15); 
+  ESL_ALLOC(om->rwv_mem, sizeof(esl_neon_128i_t) * nqw  * abc->Kp          +15);                     
+  ESL_ALLOC(om->twv_mem, sizeof(esl_neon_128i_t) * nqw  * p7O_NTRANS       +15);   
+  ESL_ALLOC(om->rfv_mem, sizeof(esl_neon_128f_t) * nqf  * abc->Kp          +15);                     
+  ESL_ALLOC(om->tfv_mem, sizeof(esl_neon_128f_t) * nqf  * p7O_NTRANS       +15);    
 
-  ESL_ALLOC(om->rbv, sizeof(__arm128i *) * abc->Kp); 
-  ESL_ALLOC(om->sbv, sizeof(__arm128i *) * abc->Kp); 
-  ESL_ALLOC(om->rwv, sizeof(__arm128i *) * abc->Kp); 
-  ESL_ALLOC(om->rfv, sizeof(__arm128f  *) * abc->Kp); 
+  ESL_ALLOC(om->rbv, sizeof(esl_neon_128i_t *) * abc->Kp); 
+  ESL_ALLOC(om->sbv, sizeof(esl_neon_128i_t *) * abc->Kp); 
+  ESL_ALLOC(om->rwv, sizeof(esl_neon_128i_t *) * abc->Kp); 
+  ESL_ALLOC(om->rfv, sizeof(esl_neon_128f_t *) * abc->Kp); 
 
   /* align vector memory on 16-byte boundaries */
-  om->rbv[0] = (__arm128i *) (((unsigned long int) om->rbv_mem + 15) & (~0xf));
-  om->sbv[0] = (__arm128i *) (((unsigned long int) om->sbv_mem + 15) & (~0xf));
-  om->rwv[0] = (__arm128i *) (((unsigned long int) om->rwv_mem + 15) & (~0xf));
-  om->twv    = (__arm128i *) (((unsigned long int) om->twv_mem + 15) & (~0xf));
-  om->rfv[0] = (__arm128f  *) (((unsigned long int) om->rfv_mem + 15) & (~0xf));
-  om->tfv    = (__arm128f  *) (((unsigned long int) om->tfv_mem + 15) & (~0xf));
+  om->rbv[0] = (esl_neon_128i_t *) (((unsigned long int) om->rbv_mem + 15) & (~0xf));
+  om->sbv[0] = (esl_neon_128i_t *) (((unsigned long int) om->sbv_mem + 15) & (~0xf));
+  om->rwv[0] = (esl_neon_128i_t *) (((unsigned long int) om->rwv_mem + 15) & (~0xf));
+  om->twv    = (esl_neon_128i_t *) (((unsigned long int) om->twv_mem + 15) & (~0xf));
+  om->rfv[0] = (esl_neon_128f_t *) (((unsigned long int) om->rfv_mem + 15) & (~0xf));
+  om->tfv    = (esl_neon_128f_t *) (((unsigned long int) om->tfv_mem + 15) & (~0xf));
 
   /* set the rest of the row pointers for match emissions */
-  for (x = 1; x < abc->Kp; x++) {
-    om->rbv[x] = om->rbv[0] + (x * nqb);
-    om->sbv[x] = om->sbv[0] + (x * nqs);
-    om->rwv[x] = om->rwv[0] + (x * nqw);
-    om->rfv[x] = om->rfv[0] + (x * nqf);
-  }
+  for (x = 1; x < abc->Kp; x++) 
+    {
+      om->rbv[x] = om->rbv[0] + (x * nqb);
+      om->sbv[x] = om->sbv[0] + (x * nqs);
+      om->rwv[x] = om->rwv[0] + (x * nqw);
+      om->rfv[x] = om->rfv[0] + (x * nqf);
+    }
   om->allocQ16  = nqb;
   om->allocQ8   = nqw;
   om->allocQ4   = nqf;
@@ -162,7 +164,6 @@ p7_oprofile_Create(int allocM, const ESL_ALPHABET *abc)
 
 /* Function:  p7_oprofile_IsLocal()
  * Synopsis:  Returns TRUE if profile is in local alignment mode.
- * Incept:    SRE, Sat Aug 16 08:46:00 2008 [Janelia]
  */
 int
 p7_oprofile_IsLocal(const P7_OPROFILE *om)
@@ -175,7 +176,6 @@ p7_oprofile_IsLocal(const P7_OPROFILE *om)
 
 /* Function:  p7_oprofile_Destroy()
  * Synopsis:  Frees an optimized profile structure.
- * Incept:    SRE, Sun Nov 25 12:22:21 2007 [Casa de Gatos]
  */
 void
 p7_oprofile_Destroy(P7_OPROFILE *om)
@@ -207,7 +207,6 @@ p7_oprofile_Destroy(P7_OPROFILE *om)
 
 /* Function:  p7_oprofile_Sizeof()
  * Synopsis:  Return the allocated size of a <P7_OPROFILE>.
- * Incept:    SRE, Wed Mar  2 10:09:21 2011 [Janelia]
  *
  * Purpose:   Returns the allocated size of a <P7_OPROFILE>,
  *            in bytes.
@@ -232,17 +231,17 @@ p7_oprofile_Sizeof(const P7_OPROFILE *om)
    * maintainability and clarity.
    */
   n  += sizeof(P7_OPROFILE);
-  n  += sizeof(__arm128i) * nqb  * om->abc->Kp +15; /* om->rbv_mem   */
-  n  += sizeof(__arm128i) * nqs  * om->abc->Kp +15; /* om->sbv_mem   */
-  n  += sizeof(__arm128i) * nqw  * om->abc->Kp +15; /* om->rwv_mem   */
-  n  += sizeof(__arm128i) * nqw  * p7O_NTRANS  +15; /* om->twv_mem   */
-  n  += sizeof(__arm128f)  * nqf  * om->abc->Kp +15; /* om->rfv_mem   */
-  n  += sizeof(__arm128f)  * nqf  * p7O_NTRANS  +15; /* om->tfv_mem   */
+  n  += sizeof(esl_neon_128i_t) * nqb  * om->abc->Kp +15; /* om->rbv_mem   */
+  n  += sizeof(esl_neon_128i_t) * nqs  * om->abc->Kp +15; /* om->sbv_mem   */
+  n  += sizeof(esl_neon_128i_t) * nqw  * om->abc->Kp +15; /* om->rwv_mem   */
+  n  += sizeof(esl_neon_128i_t) * nqw  * p7O_NTRANS  +15; /* om->twv_mem   */
+  n  += sizeof(esl_neon_128f_t) * nqf  * om->abc->Kp +15; /* om->rfv_mem   */
+  n  += sizeof(esl_neon_128f_t) * nqf  * p7O_NTRANS  +15; /* om->tfv_mem   */
   
-  n  += sizeof(__arm128i *) * om->abc->Kp;          /* om->rbv       */
-  n  += sizeof(__arm128i *) * om->abc->Kp;          /* om->sbv       */
-  n  += sizeof(__arm128i *) * om->abc->Kp;          /* om->rwv       */
-  n  += sizeof(__arm128f  *) * om->abc->Kp;          /* om->rfv       */
+  n  += sizeof(esl_neon_128i_t *) * om->abc->Kp;          /* om->rbv       */
+  n  += sizeof(esl_neon_128i_t *) * om->abc->Kp;          /* om->sbv       */
+  n  += sizeof(esl_neon_128i_t *) * om->abc->Kp;          /* om->rwv       */
+  n  += sizeof(esl_neon_128f_t *) * om->abc->Kp;          /* om->rfv       */
   
   n  += sizeof(char) * (om->allocM+2);            /* om->rf        */
   n  += sizeof(char) * (om->allocM+2);            /* om->mm        */
@@ -255,10 +254,8 @@ p7_oprofile_Sizeof(const P7_OPROFILE *om)
 
 /* Function:  p7_oprofile_Clone()
  * Synopsis:  Create a new copy of an optimized profile structure.
- * Incept:    SRE, Sun Nov 25 12:03:19 2007 [Casa de Gatos]
  *
- * Purpose:   Create a newly allocated copy of <om1> and return a ptr
- *            to it.
+ * Purpose:   Create a newly allocated copy of <om1>; return ptr to it.
  *            
  * Throws:    <NULL> on allocation error.
  */
@@ -300,31 +297,31 @@ p7_oprofile_Clone(const P7_OPROFILE *om1)
   om2->consensus = NULL;
 
   /* level 1 */
-  ESL_ALLOC(om2->rbv_mem, sizeof(__arm128i) * nqb  * abc->Kp    +15);	/* +15 is for manual 16-byte alignment */
-  ESL_ALLOC(om2->sbv_mem, sizeof(__arm128i) * nqs  * abc->Kp    +15);
-  ESL_ALLOC(om2->rwv_mem, sizeof(__arm128i) * nqw  * abc->Kp    +15);                     
-  ESL_ALLOC(om2->twv_mem, sizeof(__arm128i) * nqw  * p7O_NTRANS +15);   
-  ESL_ALLOC(om2->rfv_mem, sizeof(__arm128f)  * nqf  * abc->Kp    +15);                     
-  ESL_ALLOC(om2->tfv_mem, sizeof(__arm128f)  * nqf  * p7O_NTRANS +15);    
+  ESL_ALLOC(om2->rbv_mem, sizeof(esl_neon_128i_t) * nqb  * abc->Kp    +15);	/* +15 is for manual 16-byte alignment */
+  ESL_ALLOC(om2->sbv_mem, sizeof(esl_neon_128i_t) * nqs  * abc->Kp    +15);
+  ESL_ALLOC(om2->rwv_mem, sizeof(esl_neon_128i_t) * nqw  * abc->Kp    +15);                     
+  ESL_ALLOC(om2->twv_mem, sizeof(esl_neon_128i_t) * nqw  * p7O_NTRANS +15);   
+  ESL_ALLOC(om2->rfv_mem, sizeof(esl_neon_128f_t) * nqf  * abc->Kp    +15);                     
+  ESL_ALLOC(om2->tfv_mem, sizeof(esl_neon_128f_t) * nqf  * p7O_NTRANS +15);    
 
-  ESL_ALLOC(om2->rbv, sizeof(__arm128i *) * abc->Kp); 
-  ESL_ALLOC(om2->sbv, sizeof(__arm128i *) * abc->Kp); 
-  ESL_ALLOC(om2->rwv, sizeof(__arm128i *) * abc->Kp); 
-  ESL_ALLOC(om2->rfv, sizeof(__arm128f  *) * abc->Kp); 
+  ESL_ALLOC(om2->rbv, sizeof(esl_neon_128i_t *) * abc->Kp); 
+  ESL_ALLOC(om2->sbv, sizeof(esl_neon_128i_t *) * abc->Kp); 
+  ESL_ALLOC(om2->rwv, sizeof(esl_neon_128i_t *) * abc->Kp); 
+  ESL_ALLOC(om2->rfv, sizeof(esl_neon_128f_t *) * abc->Kp); 
 
   /* align vector memory on 16-byte boundaries */
-  om2->rbv[0] = (__arm128i *) (((unsigned long int) om2->rbv_mem + 15) & (~0xf));
-  om2->sbv[0] = (__arm128i *) (((unsigned long int) om2->sbv_mem + 15) & (~0xf));
-  om2->rwv[0] = (__arm128i *) (((unsigned long int) om2->rwv_mem + 15) & (~0xf));
-  om2->twv    = (__arm128i *) (((unsigned long int) om2->twv_mem + 15) & (~0xf));
-  om2->rfv[0] = (__arm128f  *) (((unsigned long int) om2->rfv_mem + 15) & (~0xf));
-  om2->tfv    = (__arm128f  *) (((unsigned long int) om2->tfv_mem + 15) & (~0xf));
+  om2->rbv[0] = (esl_neon_128i_t *) (((unsigned long int) om2->rbv_mem + 15) & (~0xf));
+  om2->sbv[0] = (esl_neon_128i_t *) (((unsigned long int) om2->sbv_mem + 15) & (~0xf));
+  om2->rwv[0] = (esl_neon_128i_t *) (((unsigned long int) om2->rwv_mem + 15) & (~0xf));
+  om2->twv    = (esl_neon_128i_t *) (((unsigned long int) om2->twv_mem + 15) & (~0xf));
+  om2->rfv[0] = (esl_neon_128f_t *) (((unsigned long int) om2->rfv_mem + 15) & (~0xf));
+  om2->tfv    = (esl_neon_128f_t *) (((unsigned long int) om2->tfv_mem + 15) & (~0xf));
 
   /* copy the vector data */
-  memcpy(om2->rbv[0], om1->rbv[0], sizeof(__arm128i) * nqb  * abc->Kp);
-  memcpy(om2->sbv[0], om1->sbv[0], sizeof(__arm128i) * nqs  * abc->Kp);
-  memcpy(om2->rwv[0], om1->rwv[0], sizeof(__arm128i) * nqw  * abc->Kp);
-  memcpy(om2->rfv[0], om1->rfv[0], sizeof(__arm128i) * nqf  * abc->Kp);
+  memcpy(om2->rbv[0], om1->rbv[0], sizeof(esl_neon_128i_t) * nqb  * abc->Kp);
+  memcpy(om2->sbv[0], om1->sbv[0], sizeof(esl_neon_128i_t) * nqs  * abc->Kp);
+  memcpy(om2->rwv[0], om1->rwv[0], sizeof(esl_neon_128i_t) * nqw  * abc->Kp);
+  memcpy(om2->rfv[0], om1->rfv[0], sizeof(esl_neon_128i_t) * nqf  * abc->Kp);
 
   /* set the rest of the row pointers for match emissions */
   for (x = 1; x < abc->Kp; x++) {
@@ -445,10 +442,6 @@ p7_oprofile_Shadow(const P7_OPROFILE *om1)
   p7_oprofile_Destroy(om2);
   return NULL;
 }
-
-
-
-
 /*----------------- end, P7_OPROFILE structure ------------------*/
 
 
@@ -471,11 +464,9 @@ biased_byteify(P7_OPROFILE *om, float sc)
   uint8_t b;
   sc  = -1.0f * roundf(om->scale_b * sc);
   int32_t q = round(sc);
-  uint8_t b1 = (uint8_t) q; 
-                        /* ugh. sc is now an integer cost represented in a float...           */
+  uint8_t b1 = (uint8_t) q;                              /* ugh. sc is now an integer cost represented in a float...           */
   b   = (sc > 255 - om->bias_b) ? 255 : b1 + om->bias_b; /* and now we cast, saturate, and bias it to an unsigned char cost... */
-  
-    return b;
+  return b;
 }
  
 /* unbiased_byteify()
@@ -491,8 +482,7 @@ unbiased_byteify(P7_OPROFILE *om, float sc)
 
   sc  = -1.0f * roundf(om->scale_b * sc);       /* ugh. sc is now an integer cost represented in a float...    */
   uint32_t q = round(sc);
-  uint8_t b1 = (uint8_t) q;
-  b   = (sc > 255.) ? 255 : q;	/* and now we cast and saturate it to an unsigned char cost... */
+  b   = (sc > 255.) ? 255 : (uint8_t) q;	/* and now we cast and saturate it to an unsigned char cost... */
   return b;
 }
  
@@ -513,7 +503,7 @@ wordify(P7_OPROFILE *om, float sc)
 
 
 /* sf_conversion():
- * Author: Bjarne Knudsen
+ * Original author (SSE version): Bjarne Knudsen
  * 
  * Generates the SSVFilter() parts of the profile <om> scores
  * from the completed MSV score.  This includes calculating 
@@ -528,11 +518,11 @@ static int
 sf_conversion(P7_OPROFILE *om)
 {
   int     M   = om->M;		/* length of the query                                          */
-  int     nq  = P7_NVB(M);     /* segment length; total # of striped vectors needed            */
+  int     nq  = P7_NVB(M);      /* segment length; total # of striped vectors needed            */
   int     x;			/* counter over residues                                        */
   int     q;			/* q counts over total # of striped vectors, 0..nq-1            */
-  __arm128i tmp;
-  __arm128i tmp2;
+  esl_neon_128i_t tmp;
+  esl_neon_128i_t tmp2;
 
   /* We now want to fill out om->sbv with om->rbv - bias for use in the
    * SSV filter. The only challenge is that the om->rbv values are
@@ -586,7 +576,7 @@ mf_conversion(const P7_PROFILE *gm, P7_OPROFILE *om)
   int     q;			/* q counts over total # of striped vectors, 0..nq-1            */
   int     k;			/* the usual counter over model nodes 1..M                      */
   int     z;			/* counter within elements of one SIMD minivector               */
-  union { __arm128i v; uint8_t i[16]; } tmp; /* used to align and load simd minivectors           */
+  union { esl_neon_128i_t v; uint8_t i[16]; } tmp; /* used to align and load simd minivectors           */
 
   if (nq > om->allocQ16) ESL_EXCEPTION(eslEINVAL, "optimized profile is too small to hold conversion");
 
@@ -643,7 +633,7 @@ vf_conversion(const P7_PROFILE *gm, P7_OPROFILE *om)
   int     ddtmp;		/* used in finding worst DD transition bound                    */
   int16_t  maxval;		/* used to prevent zero cost II                                 */
   int16_t  val;
-  union { __arm128i v; int16_t i[8]; } tmp; /* used to align and load simd minivectors            */
+  union { esl_neon_128i_t v; int16_t i[8]; } tmp; /* used to align and load simd minivectors            */
 
   if (nq > om->allocQ8) ESL_EXCEPTION(eslEINVAL, "optimized profile is too small to hold conversion");
 
@@ -743,7 +733,7 @@ fb_conversion(const P7_PROFILE *gm, P7_OPROFILE *om)
   int     t;			/* counter over transitions 0..7 = p7O_{BM,MM,IM,DM,MD,MI,II,DD}*/
   int     tg;			/* transition index in gm                                       */
   int     j;			/* counter in interleaved vector arrays in the profile          */
-  union { __arm128f v; float x[4]; } tmp; /* used to align and load simd minivectors               */
+  union { esl_neon_128f_t v; float x[4]; } tmp; /* used to align and load simd minivectors               */
 
   if (nq > om->allocQ4) ESL_EXCEPTION(eslEINVAL, "optimized profile is too small to hold conversion");
 
@@ -800,7 +790,6 @@ fb_conversion(const P7_PROFILE *gm, P7_OPROFILE *om)
 
 /* Function:  p7_oprofile_Convert()
  * Synopsis:  Converts standard profile to an optimized one.
- * Incept:    SRE, Mon Nov 26 07:38:57 2007 [Janelia]
  *
  * Purpose:   Convert a standard profile <gm> to an optimized profile <om>,
  *            where <om> has already been allocated for a profile of at 
@@ -871,7 +860,6 @@ p7_oprofile_Convert(const P7_PROFILE *gm, P7_OPROFILE *om)
 
 /* Function:  p7_oprofile_ReconfigLength()
  * Synopsis:  Set the target sequence length of a model.
- * Incept:    SRE, Thu Dec 20 09:56:40 2007 [Janelia]
  *
  * Purpose:   Given an already configured model <om>, quickly reset its
  *            expected length distribution for a new mean target sequence
@@ -898,7 +886,6 @@ p7_oprofile_ReconfigLength(P7_OPROFILE *om, int L)
 
 /* Function:  p7_oprofile_ReconfigMSVLength()
  * Synopsis:  Set the target sequence length of the MSVFilter part of the model.
- * Incept:    SRE, Tue Dec 16 13:39:17 2008 [Janelia]
  *
  * Purpose:   Given an  already configured model <om>, quickly reset its
  *            expected length distribution for a new mean target sequence
@@ -921,7 +908,6 @@ p7_oprofile_ReconfigMSVLength(P7_OPROFILE *om, int L)
 
 /* Function:  p7_oprofile_ReconfigRestLength()
  * Synopsis:  Set the target sequence length of the main profile.
- * Incept:    SRE, Tue Dec 16 13:41:30 2008 [Janelia]
  *
  * Purpose:   Given an  already configured model <om>, quickly reset its
  *            expected length distribution for a new mean target sequence
@@ -959,7 +945,6 @@ p7_oprofile_ReconfigRestLength(P7_OPROFILE *om, int L)
 
 /* Function:  p7_oprofile_ReconfigMultihit()
  * Synopsis:  Quickly reconfig model into multihit mode for target length <L>.
- * Incept:    SRE, Thu Aug 21 10:04:07 2008 [Janelia]
  *
  * Purpose:   Given a profile <om> that's already been configured once,
  *            quickly reconfigure it into a multihit mode for target 
@@ -992,7 +977,6 @@ p7_oprofile_ReconfigMultihit(P7_OPROFILE *om, int L)
 
 /* Function:  p7_oprofile_ReconfigUnihit()
  * Synopsis:  Quickly reconfig model into unihit mode for target length <L>.
- * Incept:    SRE, Thu Aug 21 10:10:32 2008 [Janelia]
  *
  * Purpose:   Given a profile <om> that's already been configured once,
  *            quickly reconfigure it into a unihit mode for target 
@@ -1042,7 +1026,7 @@ p7_oprofile_GetFwdTransitionArray(const P7_OPROFILE *om, int type, float *arr )
 {
   int     nq  = P7_NVF(om->M);     /* # of striped vectors needed            */
   int i, j;
-  union { __arm128f v; float x[4]; } tmp; /* used to align and read simd minivectors               */
+  union { esl_neon_128f_t v; float x[4]; } tmp; /* used to align and read simd minivectors               */
 
 
   for (i=0; i<nq; i++) {
@@ -1084,7 +1068,7 @@ int
 p7_oprofile_GetMSVEmissionScoreArray(const P7_OPROFILE *om, uint8_t *arr )
 {
   int x, q, z, k;
-  union { __arm128i v; uint8_t i[16]; } tmp; /* used to align and read simd minivectors           */
+  union { esl_neon_128i_t v; uint8_t i[16]; } tmp; /* used to align and read simd minivectors           */
   int      M   = om->M;    /* length of the query                                          */
   int      K   = om->abc->Kp;
   int      nq  = P7_NVB(M);     /* segment length; total # of striped vectors needed            */
@@ -1129,7 +1113,7 @@ int
 p7_oprofile_GetFwdEmissionScoreArray(const P7_OPROFILE *om, float *arr )
 {
   int x, q, z, k;
-  union { __arm128f v; float f[4]; } tmp; /* used to align and read simd minivectors               */
+  union { esl_neon_128f_t v; float f[4]; } tmp; /* used to align and read simd minivectors               */
   int      M   = om->M;    /* length of the query                                          */
   int      K   = om->abc->Kp;
   int      nq  = P7_NVF(M);     /* segment length; total # of striped vectors needed            */
@@ -1175,7 +1159,7 @@ int
 p7_oprofile_GetFwdEmissionArray(const P7_OPROFILE *om, P7_BG *bg, float *arr )
 {
   int x, q, z, k;
-  union { __arm128f v; float f[4]; } tmp; /* used to align and read simd minivectors               */
+  union { esl_neon_128f_t v; float f[4]; } tmp; /* used to align and read simd minivectors               */
   int      M   = om->M;    /* length of the query                                          */
   int      Kp  = om->abc->Kp;
   int      K   = om->abc->K;
@@ -1218,7 +1202,7 @@ oprofile_dump_mf(FILE *fp, const P7_OPROFILE *om)
   int     q;			/* q counts over total # of striped vectors, 0..nq-1            */
   int     k;			/* counter over nodes 1..M                                      */
   int     z;			/* counter within elements of one SIMD minivector               */
-  union { __arm128i v; uint8_t i[16]; } tmp; /* used to align and read simd minivectors           */
+  union { esl_neon_128i_t v; uint8_t i[16]; } tmp; /* used to align and read simd minivectors           */
 
   /* Header (rearranged column numbers, in the vectors)  */
   fprintf(fp, "     ");
@@ -1277,7 +1261,7 @@ oprofile_dump_vf(FILE *fp, const P7_OPROFILE *om)
   int     z;			/* counter within elements of one SIMD minivector               */
   int     t;			/* counter over transitions 0..7 = p7O_{BM,MM,IM,DM,MD,MI,II,DD}*/
   int     j;			/* counter in interleaved vector arrays in the profile          */
-  union { __arm128i v; int16_t i[8]; } tmp; /* used to align and read simd minivectors           */
+  union { esl_neon_128i_t v; int16_t i[8]; } tmp; /* used to align and read simd minivectors           */
 
   /* Emission score header (rearranged column numbers, in the vectors)  */
   fprintf(fp, "     ");
@@ -1402,7 +1386,7 @@ oprofile_dump_fb(FILE *fp, const P7_OPROFILE *om, int width, int precision)
   int     z;			/* counter within elements of one SIMD minivector               */
   int     t;			/* counter over transitions 0..7 = p7O_{BM,MM,IM,DM,MD,MI,II,DD}*/
   int     j;			/* counter in interleaved vector arrays in the profile          */
-  union { __arm128f v; float x[4]; } tmp; /* used to align and read simd minivectors               */
+  union { esl_neon_128f_t v; float x[4]; } tmp; /* used to align and read simd minivectors               */
 
   /* Residue emissions */
   for (x = 0; x < om->abc->Kp; x++)
@@ -1504,7 +1488,6 @@ oprofile_dump_fb(FILE *fp, const P7_OPROFILE *om, int width, int precision)
 
 /* Function:  p7_oprofile_Dump()
  * Synopsis:  Dump internals of a <P7_OPROFILE>
- * Incept:    SRE, Thu Dec 13 08:49:30 2007 [Janelia]
  *
  * Purpose:   Dump the internals of <P7_OPROFILE> structure <om>
  *            to stream <fp>; generally for testing or debugging
@@ -1598,7 +1581,6 @@ p7_oprofile_Sample(ESL_RANDOMNESS *r, const ESL_ALPHABET *abc, const P7_BG *bg, 
 
 /* Function:  p7_oprofile_Compare()
  * Synopsis:  Compare two optimized profiles for equality.
- * Incept:    SRE, Wed Jan 21 13:29:10 2009 [Janelia]
  *
  * Purpose:   Compare the contents of <om1> and <om2>; return 
  *            <eslOK> if they are effectively identical profiles,
@@ -1627,9 +1609,9 @@ p7_oprofile_Compare(const P7_OPROFILE *om1, const P7_OPROFILE *om2, float tol, c
   int Q8  = P7_NVW(om1->M);
   int Q16 = P7_NVB(om1->M);
   int q, r, x, y;
-  union { __arm128i v; uint8_t c[16]; } a16, b16;
-  union { __arm128i v; int16_t w[8];  } a8,  b8;
-  union { __arm128f  v; float   x[4];  } a4,  b4;
+  union { esl_neon_128i_t v; uint8_t c[16]; } a16, b16;
+  union { esl_neon_128i_t v; int16_t w[8];  } a8,  b8;
+  union { esl_neon_128f_t  v; float   x[4];  } a4,  b4;
 
   if (om1->mode      != om2->mode)      ESL_FAIL(eslFAIL, errmsg, "comparison failed: mode");
   if (om1->L         != om2->L)         ESL_FAIL(eslFAIL, errmsg, "comparison failed: L");
@@ -1965,11 +1947,3 @@ main(int argc, char **argv)
 #endif /*p7OPROFILE_EXAMPLE*/
 /*----------------------- end, example --------------------------*/
 
-
-
-/*****************************************************************
- * @LICENSE@
- *   
- * SVN $Id$
- * SVN $URL$
- *****************************************************************/

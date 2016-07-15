@@ -71,16 +71,10 @@ enum p7_strands_e {    p7_STRAND_TOPONLY  = 0, p7_STRAND_BOTTOMONLY = 1,  p7_STR
 
 extern int          p7_Init(void);
 extern void         p7_banner(FILE *fp, char *progname, char *banner);
-extern void         p7_Die (char *format, ...) ESL_ANALYZER_NORETURN;
-extern void         p7_Fail(char *format, ...) ESL_ANALYZER_NORETURN;
+extern void         p7_Die (char *format, ...) ESL_ATTRIBUTE_NORETURN;
+extern void         p7_Fail(char *format, ...) ESL_ATTRIBUTE_NORETURN;
 extern ESL_GETOPTS *p7_CreateDefaultApp(ESL_OPTIONS *options, int nargs, int argc, char **argv, char *banner, char *usage);
 extern int          p7_AminoFrequencies(float *f);
 
 #endif /*p7GENERAL_INCLUDED*/
 
-/************************************************************
- * @LICENSE@
- *
- * SVN $Id$
- * SVN $URL$
- ************************************************************/
