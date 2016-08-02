@@ -148,6 +148,7 @@ case $host in
     i?86-*-*)      host_platform=intel;;
     x86*-*-*)      host_platform=intel;;
     arm*-*-*)      host_platform=arm;;
+    aarch64*-*-*)  host_platform=arm64;;
     powerpc*-*-*)  host_platform=power;;
     *)             AC_MSG_WARN([host_platform unrecognized (not intel, power, arm...)]);;
 esac
@@ -366,125 +367,279 @@ fi
 ESL_PIC_FLAGS
 
 
+# Figure out what SIMD we support. 
+# Start with x86 variants
 
-
-
-################################################################
-# Check which vector implementations we can compile, for
-# any that weren't explicitly turned on/off on command line.
-# After this, $enable_{sse,neon} are either "yes" or "no".
-#
-# 
-if test "$host_platform" = "arm" && test "$enable_neon" = "check"; then
+# The AC_RUN_IFELSE() is there because it's possible to have 
+# hardware that doesn't support SSE2 instructions, yet the
+# compiler can generate them: example AMD Athlons with gcc.
+# So we need to test that an SSE2 program actually runs without
+# generating an "illegal instruction" error. The program
+# here is sufficient [xref J3/127].
+# Note: some platforms (Ubuntu 32-bit for example) absolutely
+# must have the -msse2 cflag on in order to detect a working
+# emmintrin.h, so we set SIMD_CFLAGS before running the test.
+if test "$enable_sse" = "yes" || test "$enable_sse" = "check"; then
+   if test "x$SSE_CFLAGS" = x; then
+     case $ax_cv_c_compiler_vendor in
+       gnu)   AX_CHECK_COMPILER_FLAGS(-msse2,[SSE_CFLAGS="-msse2"],[]);;
+       *)     ;;
+     esac
+   fi
+fi
+if test "$enable_sse" = "check" && test "$enable_vmx" != "yes"; then
    sre_save_CFLAGS="$CFLAGS"
    sre_save_CPPFLAGS="$CPPFLAGS"
-   sre_save_SIMDFLAGS="$SIMD_CFLAGS"
+   CFLAGS="$CFLAGS $SSE_CFLAGS"
+   CPPFLAGS="$CPPFLAGS $SSE_CFLAGS"
+   AC_CHECK_HEADER([emmintrin.h],[
+     AC_MSG_CHECKING([if platform can run SSE/SSE2 instructions])
+     AC_RUN_IFELSE([AC_LANG_PROGRAM( [[#include <emmintrin.h>]],
+                                      [[__m128i v = _mm_set1_epi8(0);]])],
+                   [AC_MSG_RESULT([yes])
+                     enable_sse=yes],
+                   [AC_MSG_RESULT([no])])])
+   CFLAGS="$sre_save_CFLAGS"
+   CPPFLAGS="$sre_save_CPPFLAGS"
+fi
+if test "$enable_sse" = "yes"; then
+   AC_DEFINE(HAVE_SSE2,1,[Support SSE2 (Streaming SIMD Extensions 2) instructions])
+fi
 
+if test "$enable_avx2" = "yes" || test "$enable_avx2" = "check"; then
    if test "x$SIMD_CFLAGS" = x; then
      case $ax_cv_c_compiler_vendor in
-       gnu)   AX_CHECK_COMPILER_FLAGS(-mfpu=neon,[SIMD_CFLAGS="-mfpu=neon"],[]);;
+      gnu)   AX_CHECK_COMPILER_FLAGS([-mavx -mavx2], [ AVX_CFLAGS="-mavx -mavx2" ],[]);;
+       *)     ;;
+     esac
+   fi
+fi
+if test "$enable_avx2" = "check" && test "$enable_vmx" != "yes"; then
+AC_MSG_CHECKING([whether AVX2 is supported])
+  sre_save_cflags="$CFLAGS"
+  haveavx=no
+  CFLAGS="$CFLAGS $SSE_CFLAGS $AVX_CFLAGS"
+  AC_COMPILE_IFELSE(  [AC_LANG_PROGRAM([[#include <immintrin.h>]],
+        [[__m256i test1;
+         __m256i test2;
+         test1 = _mm256_set1_epi8(37);
+         test2 = _mm256_set1_epi8(111);
+         test2 = _mm256_adds_epi8(test1, test2);
+      ]])],
+  [AC_DEFINE([HAVE_AVX2])
+  haveavx=yes])
+  AC_MSG_RESULT([$haveavx])
+  CFLAGS="$sre_save_cflags"
+fi
+
+if test "$enable_avx512" = "yes" || test "$enable_avx512" = "check"; then
+   if test "x$SIMD_CFLAGS" = x; then
+     case $ax_cv_c_compiler_vendor in
+      gnu)   AX_CHECK_COMPILER_FLAGS([-mavx512bw -mavx512dq], [ AVX512_CFLAGS="-mavx512bw -mavx512dq" ],[]);;
+       *)     ;;
+     esac
+   fi
+fi
+if test "$enable_avx512" = "check" && test "$enable_vmx" != "yes"; then
+AC_MSG_CHECKING([whether AVX-512 is supported])
+  sre_save_cflags="$CFLAGS"
+  haveavx512=no
+  CFLAGS="$CFLAGS $AVX512_CFLAGS"
+  AC_COMPILE_IFELSE(  [AC_LANG_PROGRAM([[#include <immintrin.h>]],
+        [[__m512i test1;
+         __m512i test2;
+         test1 = _mm512_set1_epi8(37);
+         test2 = _mm512_set1_epi8(111);
+         test2 = _mm512_adds_epi8(test1, test2);
+      ]])],
+  [AC_DEFINE([HAVE_AVX512])
+  haveavx512=yes])
+  AC_MSG_RESULT([$haveavx512])
+  CFLAGS="$sre_save_cflags"
+fi
+
+  AC_SUBST(SSE_CFLAGS)
+  AC_SUBST(AVX_CFLAGS)
+  AC_SUBST(AVX512_CFLAGS)
+
+# ARM and NEON SIMD flags
+if test "$host_platform" != "arm64"  && (test "$enable_neon" = "yes" || test "$enable_neon" = "check"); then
+   if test "x$SIMD_CFLAGS" = x; then
+     case $ax_cv_c_compiler_vendor in
+       gnu)   AX_CHECK_COMPILER_FLAGS(-mfpu=neon,[ARM_CFLAGS="-mfpu=neon"],[]);;
        *)     ;;
      esac
    fi
 
-   AC_MSG_CHECKING([whether ARM NEON vector instructions are supported])	
-   CFLAGS="$CFLAGS $SIMD_CFLAGS"
-   CPPFLAGS="$CPPFLAGS $SIMD_CFLAGS"
-   AC_RUN_IFELSE( [AC_LANG_PROGRAM( [[#include <arm_neon.h>]],
-                                    [[ int32x4_t x = vdupq_n_s32(0);]])],
-                   [AC_MSG_RESULT([yes])
-                     enable_neon=yes],
-                   [AC_MSG_RESULT([no])
-		     enable_neon=no])
-   CFLAGS="$sre_save_CFLAGS"
-   CPPFLAGS="$sre_save_CPPFLAGS"
-   SIMD_CFLAGS="$sre_save_SIMDFLAGS"
-   AC_DEFINE(HAVE_NEON,1,[support NEON vector instructions])	
-fi
-	
-	
-if test "$host_platform" = "intel" && test "$enable_sse" = "check"; then
-   sre_save_CFLAGS="$CFLAGS"
-   CFLAGS="$CFLAGS $SIMD_CFLAGS"
+else
+   if test "$host_platform" = "arm64" && test "x$SIMD_CFLAGS" = x; then
+       case $ax_cv_c_compiler_vendor in
+         gnu)   AX_CHECK_COMPILER_FLAGS(-march=armv8-a, [ARM_CFLAGS="-march=armv8-a"], []);;
+         *)     ;;
+       esac
+     fi
+   fi
 
-   AC_MSG_CHECKING([whether Intel SSE2 vector instructions are supported])
-   AC_COMPILE_IFELSE(  [AC_LANG_PROGRAM([[#include <emmintrin.h>]],
- 				 [[__m128i* one=(__m128i*)_mm_malloc(4, 16);
-				   __m128i* two=(__m128i*)_mm_malloc(4, 16);
-				   __m128i xmm1 = _mm_load_si128(one);
-				   __m128i xmm2 = _mm_load_si128(two);
-				   __m128i xmm3 = _mm_or_si128(xmm1, xmm2);
-				   _mm_store_si128(one, xmm3);
-				   _mm_free(one);
-				   _mm_free(two);
-				 ]])],
-	[ AC_MSG_RESULT([yes])
-          enable_sse=yes],
-	[ AC_MSG_RESULT([no])
-          enable_sse=no])
-
-    CFLAGS="$sre_save_CFLAGS"
-    AC_DEFINE(HAVE_SSE,1,[support SSE vector instructions])	
-fi
-	
-
-################################################################
-# Set SIMD_CFLAGS: determine compiler options for vector implementations
-# Only do this if caller didn't provide a specific SIMD_CFLAGS already.
-#
-
-if test "$enable_neon" = "yes" && test "x$SIMD_CFLAGS" = x; then
+if test "$enable_neon" = "check"; then
    sre_save_CFLAGS="$CFLAGS"
    sre_save_CPPFLAGS="$CPPFLAGS"
-  
-   case $ax_cv_c_compiler_vendor in
-     gnu)   AX_CHECK_COMPILER_FLAGS(-mfpu=neon,[SIMD_CFLAGS="-mfpu=neon"],[]);;
-     *)     ;;
-   esac
-
-   # Determine target if targeting is specified.
-   # Do this by attempting to execute code with different 
-   # combinations of NEON/VFP compiler options. This allows 
-   # us to determine the best compile options for each 
-   # ARM architecture. 
-   cortex_a5="-mcpu=cortex-a5 -mfpu=neon-fp16"
-   cortex_a7="-mcpu=cortex-a7 -mfpu=neon-vfpv4"
-   cortex_a8="-mcpu=cortex-a8 -mfpu=neon"
-   cortex_a9="-mcpu=cortex-a9 -mfpu=neon-fp16"
-   cortex_a15="-mcpu=cortex-a15 -mfpu=neon-vfpv4"
-  
-   CFLAGS="$CFLAGS $cortex_a5"
-   CPPFLAGS="$CPPFLAGS $cortex_a5"     
-   AC_MSG_CHECKING([for cortex_a5])
-   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                     [vector_flags="$cortex_a5"; AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no])])
-
-   CFLAGS="$sre_save_CFLAGS $cortex_a7"  
-   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a7"
-   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a7"], [])
-   CFLAGS="$sre_save_CFLAGS $cortex_a8"  
-   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a8"
-   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                     [vector_flags="$cortex_a8"], [])
-   CFLAGS="$sre_save_CFLAGS $cortex_a9"  
-   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a9"
-   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                     [vector_flags="$cortex_a9"], [])
-   CFLAGS="$sre_save_CFLAGS $cortex_a15"  
-   CPPFLAGS="$sre_save_CPPFLAGS $cortex_a15"
-   AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                     [vector_flags="$cortex_a15"], [])
-  
-  CFLAGS="$sre_save_CFLAGS"
-  CPPFLAGS="$sre_save_CPPFLAGS"
-  if test "x$vector_flags" != x; then
-    SIMD_CFLAGS="$vector_flags"
-  fi
+   CFLAGS="$CFLAGS $ARM_CFLAGS"
+   CPPFLAGS="$CPPFLAGS $ARM_CFLAGS"
+   AC_CHECK_HEADER([arm_neon.h],[
+     AC_MSG_CHECKING([if platform can run NEON instructions])
+     AC_RUN_IFELSE([AC_LANG_PROGRAM( [[#include <arm_neon.h>]],
+                                      [[ int32x4_t x = vdupq_n_s32(0);]])],
+                   [AC_MSG_RESULT([yes])
+                     enable_neon=yes],
+                   [AC_MSG_RESULT([no])])])
+   CFLAGS="$sre_save_CFLAGS"
+   CPPFLAGS="$sre_save_CPPFLAGS"
+fi
+if test "$enable_neon" = "yes"; then
+   AC_DEFINE(HAVE_NEON,1,[Support NEON instructions])
+   if test "$host_platform" = "arm64"; then
+      AC_DEFINE(HAVE_ARM64,1,[AArch64 target])
+   fi
 fi
 
+# NEON: Check for NEON compiler flag
+# todo: we can always check for other ARM floating point flags later
+#if test "$enable_neon" = "yes" || test "$enable_neon" = "check"; then
+# Determine target if targeting is specified.
+# Do this by attempting to execute code with different 
+# cominations of NEON/VFP compiler options. This allows 
+# us to determine the best compile options for each 
+# ARM architecture. 
+if test "$enable_neon" = "yes" && test "$host_platform" != "arm64"; then
+  cortex_a5="-mfpu=neon-fp16"
+  cortex_a7="-mfpu=neon-vfpv4"
+  cortex_a8="-mfpu=neon"
+  cortex_a9="-mfpu=neon-fp16"
+  cortex_a15="-mfpu=neon-vfpv4"
+  sre_save_CFLAGS="$CFLAGS"
+  sre_save_CPPFLAGS="$CPPFLAGS"
+  CFLAGS="$CFLAGS $cortex_a5"
+  CPPFLAGS="$CPPFLAGS $cortex_a5"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="-mcpu=cortex-a5 -mfpu=neon-fp16"], [])
+  CFLAGS="$sre_save_CFLAGS $cortex_a7"
+  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a7"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="-mcpu=cortex-a7 -mfpu=neon-vfpv4"], [])
+  CFLAGS="$sre_save_CFLAGS $cortex_a8"
+  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a8"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="-mcpu=cortex-a8 -mfpu=neon"], [])
+  CFLAGS="$sre_save_CFLAGS $cortex_a9"
+  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a9"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="-mcpu=cortex-a9 -mfpu=neon-fp16"], [])
+  CFLAGS="$sre_save_CFLAGS $cortex_a15"
+  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a15"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="-mcpu=cortex-a15 -mfpu=neon-vfpv4"], [])
 
+  CFLAGS="$sre_save_CFLAGS"
+  CPPFLAGS="$sre_save_CPPFLAGS"
 
+else
+   if test "x$SIMD_CFLAGS" = x && test "$host_platform" != "arm64"; then
+     case $ax_cv_c_compiler_vendor in
+       gnu)   AX_CHECK_COMPILER_FLAGS(-mfpu=neon,[SIMD_CFLAGS="-mfpu=neon"],
+               [AC_MSG_WARN([no NEON hardware detected])]);;
+       *)     ;;
+       esac
+   fi
+fi
+
+if test "$enable_neon" = "yes" && test "$host_platform" = "arm64"; then
+  cortex_a53="-march=armv8-a -mcpu=cortex-a53"
+  cortex_a57="-march=armv8-a -mcpu=cortex-a57"
+  cortex_a72="-march=armv8-a -mcpu=cortex-a72"
+  cortex_a73="-march=armv8-a -mcpu=cortex-a73"
+  sre_save_CFLAGS="$CFLAGS"
+  sre_save_CPPFLAGS="$CPPFLAGS"
+  CFLAGS="$CFLAGS $cortex_a53"
+  CPPFLAGS="$CPPFLAGS $cortex_a53"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="$cortex_a53"], [])
+  CFLAGS="$sre_save_CFLAGS $cortex_a57"
+  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a57"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="$cortex_a57"], [])
+  CFLAGS="$sre_save_CFLAGS $cortex_a72"
+  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a72"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="$cortex_a72"], [])
+  CFLAGS="$sre_save_CFLAGS $cortex_a73"
+  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a73"
+  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
+                    [vector_flags="$cortex_a73"], [])
+
+  CFLAGS="$sre_save_CFLAGS"
+  CPPFLAGS="$sre_save_CPPFLAGS"
+fi
+
+if test "y$vector_flags" != "y"; then
+  ARM_CFLAGS="$vector_flags"
+fi
+
+AC_SUBST(ARM_CFLAGS)
+
+# VMX/Altivec (not autodetected yet; must use --enable-vmx to enable)
+if test "$enable_sse" != "yes" && test "$enable_neon" != "yes"; then
+  if test "x$SIMD_CFLAGS" = x; then
+    VMX_SIMD_CFLAGS=""
+    if test "$GCC" = "yes"; then
+       AX_CHECK_COMPILER_FLAGS(-faltivec, [VMX_SIMD_CFLAGS="-faltivec"],
+         [AX_CHECK_COMPILER_FLAGS(-maltivec -mabi=altivec,
+             [VMX_SIMD_CFLAGS="-maltivec -mabi=altivec"],
+             [AX_CHECK_COMPILER_FLAGS(-fvec, [VMX_SIMD_CFLAGS="-fvec"],
+                     [AC_MSG_ERROR([Need a version of gcc with -maltivec])])])])
+    elif test "${ax_cv_c_compiler_vendor}" = "ibm"; then
+       AX_CHECK_COMPILER_FLAGS(-qenablevmx, [VMX_SIMD_CFLAGS="$VMX_SIMD_CFLAGS -qenablevmx"],[])
+       AX_CHECK_COMPILER_FLAGS(-qaltivec,   [VMX_SIMD_CFLAGS="$VMX_SIMD_CFLAGS -qaltivec"],[])
+    else
+       AX_CHECK_COMPILER_FLAGS(-faltivec, [VMX_SIMD_CFLAGS="-faltivec"],[])
+    fi
+  else
+    VMX_SIMD_CFLAGS="$SIMD_CFLAGS"
+  fi
+  if test "$enable_vmx" = "check"; then
+     sre_save_cflags="$CFLAGS"
+     CFLAGS="$CFLAGS $VMX_SIMD_CFLAGS"
+     AC_MSG_CHECKING([if platform can run Altivec/VMX instructions])
+     AC_RUN_IFELSE([AC_LANG_PROGRAM( [[#include <altivec.h>]],
+                                   [[vector unsigned char zerov;
+                                     vector unsigned char onev;
+                                     zerov = vec_splat_u8(0);
+                                     onev = vec_splat_u8(1);
+                                     onev = vec_adds(onev, zerov);
+                                   ]])],
+                     [AC_MSG_RESULT([yes])
+                       enable_vmx=yes],
+                     [AC_MSG_RESULT([no])
+                        if test "${ax_cv_c_compiler_vendor}" = "ibm"; then
+                           echo "******************************************************"
+                           echo "*  You seem to have the IBM  C compiler.  If your    *"
+                           echo "*  processor supports vector instructions it is      *"
+                           echo "*  possible specifying an architecture would enable  *"
+                           echo "*  vector support, i.e.                              *"
+                           echo "*                                                    *"
+                           echo "*    --with-xlc-arch=XXX                             *"
+                           echo "*                                                    *"
+                           echo "*  where XXX is pwr6, auto or whatever kind of CPU   *"
+                           echo "*  you have.                                         *"
+                           echo "******************************************************"
+                        fi
+                   ])
+     CFLAGS="$sre_save_cflags"
+  fi
+  if test "$enable_vmx" = "yes"; then
+    SIMD_CFLAGS="$VMX_SIMD_CFLAGS"
+    AC_DEFINE(HAVE_VMX,1,[Support Altivec/VMX vector instructions])
+  fi
+fi
 
 AC_SUBST(SIMD_CFLAGS)
 
