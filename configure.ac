@@ -176,11 +176,12 @@ AC_MSG_NOTICE([Full HMMER source distribution - using full configuration])
 
 # --enable-sse    Enable the Intel SSE vector implementation
 # --enable-neon   Enable the ARM Neon vector implementation
-#
+# --arm-target    Specify a target CPU (ARM)
 # $enable_{sse,neon} = "yes" | "no" | "check"
 #
 AC_ARG_ENABLE(sse, [AS_HELP_STRING([--enable-sse], [enable Intel SSE vector implementation])], enable_sse=$enableval,   enable_sse=check)
 AC_ARG_ENABLE(neon,[AS_HELP_STRING([--enable-neon],[enable ARM NEON vector implementation])],  enable_neon=$enableval,  enable_neon=check)
+AC_ARG_ENABLE(arm-target,[AS_HELP_STRING([--enable-arm-target],[specify ARM CPU target])],  arm_target=$enableval, arm_target="no")
 
 
 # --enable-debugging      - set basic debugging (level 1)
@@ -239,7 +240,7 @@ AC_ARG_ENABLE(gprof,[AS_HELP_STRING([--enable-gprof],[compile for gcc code profi
 if test "$ok" = "yes"; then
   AC_MSG_NOTICE([Compiling with gprof instrumentation.])
   CC="gcc"
-  CFLAGS="-O -g -pg"
+  CFLAGS="-O2 -g -pg"
   sre_cflags_env_set=yes
 fi
 
@@ -471,14 +472,7 @@ if test "$host_platform" != "arm64"  && (test "$enable_neon" = "yes" || test "$e
      esac
    fi
 
-else
-   if test "$host_platform" = "arm64" && test "x$SIMD_CFLAGS" = x; then
-       case $ax_cv_c_compiler_vendor in
-         gnu)   AX_CHECK_COMPILER_FLAGS(-march=armv8-a, [ARM_CFLAGS="-march=armv8-a"], []);;
-         *)     ;;
-       esac
-     fi
-   fi
+fi
 
 if test "$enable_neon" = "check"; then
    sre_save_CFLAGS="$CFLAGS"
@@ -503,45 +497,10 @@ if test "$enable_neon" = "yes"; then
 fi
 
 # NEON: Check for NEON compiler flag
-# todo: we can always check for other ARM floating point flags later
-#if test "$enable_neon" = "yes" || test "$enable_neon" = "check"; then
-# Determine target if targeting is specified.
-# Do this by attempting to execute code with different 
-# cominations of NEON/VFP compiler options. This allows 
-# us to determine the best compile options for each 
-# ARM architecture. 
-if test "$enable_neon" = "yes" && test "$host_platform" != "arm64"; then
-  cortex_a5="-mfpu=neon-fp16"
-  cortex_a7="-mfpu=neon-vfpv4"
-  cortex_a8="-mfpu=neon"
-  cortex_a9="-mfpu=neon-fp16"
-  cortex_a15="-mfpu=neon-vfpv4"
-  sre_save_CFLAGS="$CFLAGS"
-  sre_save_CPPFLAGS="$CPPFLAGS"
-  CFLAGS="$CFLAGS $cortex_a5"
-  CPPFLAGS="$CPPFLAGS $cortex_a5"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="-mcpu=cortex-a5 -mfpu=neon-fp16"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a7"
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a7"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="-mcpu=cortex-a7 -mfpu=neon-vfpv4"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a8"
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a8"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="-mcpu=cortex-a8 -mfpu=neon"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a9"
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a9"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="-mcpu=cortex-a9 -mfpu=neon-fp16"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a15"
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a15"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="-mcpu=cortex-a15 -mfpu=neon-vfpv4"], [])
+if test "$enable_neon" = "yes" && "$arm_target" != "no"; then
+  ARM_CFLAGS="-mcpu=$arm_target -mtune=$arm_target"
 
-  CFLAGS="$sre_save_CFLAGS"
-  CPPFLAGS="$sre_save_CPPFLAGS"
-
+  
 else
    if test "x$SIMD_CFLAGS" = x && test "$host_platform" != "arm64"; then
      case $ax_cv_c_compiler_vendor in
@@ -552,37 +511,6 @@ else
    fi
 fi
 
-if test "$enable_neon" = "yes" && test "$host_platform" = "arm64"; then
-  cortex_a53="-march=armv8-a -mcpu=cortex-a53"
-  cortex_a57="-march=armv8-a -mcpu=cortex-a57"
-  cortex_a72="-march=armv8-a -mcpu=cortex-a72"
-  cortex_a73="-march=armv8-a -mcpu=cortex-a73"
-  sre_save_CFLAGS="$CFLAGS"
-  sre_save_CPPFLAGS="$CPPFLAGS"
-  CFLAGS="$CFLAGS $cortex_a53"
-  CPPFLAGS="$CPPFLAGS $cortex_a53"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a53"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a57"
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a57"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a57"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a72"
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a72"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a72"], [])
-  CFLAGS="$sre_save_CFLAGS $cortex_a73"
-  CPPFLAGS="$sre_save_CPPFLAGS $cortex_a73"
-  AC_RUN_IFELSE([AC_LANG_PROGRAM( [[]],[[int a = 32;]])],
-                    [vector_flags="$cortex_a73"], [])
-
-  CFLAGS="$sre_save_CFLAGS"
-  CPPFLAGS="$sre_save_CPPFLAGS"
-fi
-
-if test "y$vector_flags" != "y"; then
-  ARM_CFLAGS="$vector_flags"
-fi
 
 AC_SUBST(ARM_CFLAGS)
 
